@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Local runtime data
+data/*.db
+data/*.db-journal
+logs/*.log
+logs/*.log.*
+
+# Secrets -- never commit these
+certs/*.pem
+certs/*.pem.crt
+certs/*.pem.key
+certs/*.crt
+certs/*.key
+config/config.yaml

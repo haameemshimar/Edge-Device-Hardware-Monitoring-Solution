@@ -1,0 +1,32 @@
+device_id: "edge-device-001"
+poll_interval_seconds: 15
+buffer_db_path: "./data/buffer.db"
+log_level: "INFO"
+log_dir: "./logs"
+log_max_bytes: 5000000
+log_backup_count: 3
+
+thresholds:
+  cpu_percent: 90
+  memory_percent: 90
+  gpu_utilization_percent: 95
+  gpu_temperature_c: 85
+  disk_percent: 90
+
+mqtt:
+  enabled: true
+  # For local testing: broker_host: "localhost", broker_port: 1883, use_tls: false
+  # For AWS IoT Core: your account's data endpoint, port 8883, use_tls: true
+  broker_host: "your-iot-endpoint.iot.<region>.amazonaws.com"
+  broker_port: 8883
+  use_tls: true
+  ca_cert: "certs/AmazonRootCA1.pem"
+  client_cert: "certs/device-cert.pem.crt"
+  client_key: "certs/device-private.pem.key"
+  topic: "edge/devices/{device_id}/metrics"
+  qos: 1
+
+slack:
+  enabled: false
+  webhook_url: ""   # set via EDGE_MONITOR_SLACK_WEBHOOK env var instead
+  summary_interval_seconds: 300
