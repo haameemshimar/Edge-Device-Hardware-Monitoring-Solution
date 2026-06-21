@@ -1,3 +1,12 @@
+# Design document: edge hardware monitoring agent
+
+## Architecture
+
+A lightweight Python daemon runs alongside the device's computer vision
+workload:
+
+## collect (psutil + NVML) -> local SQLite buffer -> MQTT publish -> AWS IoT Core ##
+
 It's a single long-running process (not cron), holding one persistent
 MQTT connection rather than reconnecting every cycle. Each cycle: collects
 CPU/RAM/disk/GPU/temperature, checks them against local alert thresholds,
