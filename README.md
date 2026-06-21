@@ -1,76 +1,255 @@
-It's a single long-running process (not cron), holding one persistent
-MQTT connection rather than reconnecting every cycle. Each cycle: collects
-CPU/RAM/disk/GPU/temperature, checks them against local alert thresholds,
-appends to a rolling window for periodic Slack summaries, writes the
-sample to a local buffer, then attempts to drain that buffer over MQTT.
-Network I/O runs on the MQTT client's own background thread, so a slow or
-dead connection never blocks the next collection cycle — verified
-directly by killing the broker mid-run and confirming the agent kept
-collecting without blocking or crashing.
+# Edge device hardware monitoring agent
 
-## Why MQTT to AWS IoT Core
+A lightweight Python daemon that collects CPU, GPU, RAM, disk, and
+temperature metrics on a Linux edge device and publishes them over MQTT
+to AWS IoT Core, with local alerting and a periodic Slack summary on top.
+See `design.md` for the architecture and reasoning behind the choices below.
 
-These devices are already managed via IoT Core/Greengrass, so per-device
-X.509 identity already exists — reusing it means no new credential
-management. MQTT is built for constrained, intermittently-connected
-devices, unlike polling a REST API. Pub/sub also decouples the device
-from any specific consumer: the IoT Rules Engine can fan one stream out
-to CloudWatch, S3/Timestream, and Lambda/SNS without touching device
-code. This isn't just a design intention — the agent authenticates with
-a real per-device certificate over mutual TLS and publishes to a live
-AWS IoT Core endpoint, confirmed via the console's MQTT test client.
+## What's implemented
 
-## Trade-offs considered
+**Core**
+- CPU, GPU, RAM, disk, and CPU/board temperature collection (`psutil` + NVML)
+- Runs as a non-blocking periodic loop (`poll_interval_seconds`, configurable)
+- Publishes over MQTT, with a local SQLite-backed buffer so metrics survive
+  a network outage instead of being lost, and drain automatically once
+  connectivity returns
+- Tested against both a local Mosquitto broker (development) and a real
+  AWS IoT Core endpoint with mutual TLS (production)
 
-- **SQLite buffer vs. in-memory queue**: survives a process restart,
-  handles concurrent reads/writes safely with no extra service to run.
-  Capped by age and row count so an outage can't fill the disk — logging
-  follows the same philosophy via rotation (5MB × 3 backups), since an
-  agent watching disk usage shouldn't be the thing that exhausts it.
-- **`try/finally` for the loop and MQTT shutdown, `with` everywhere
-  else**: finally guarantees the connection/buffer handle releases on
-  any exit path; context managers give the same guarantee more concisely
-  where the only resource is a lock or file handle.
-- **Python vs. Go/Rust**: more memory and interpreter overhead, but
-  matches the existing stack and is faster to review. Negligible cost
-  next to a GPU-bound inference workload at a 30s poll interval.
-- **No alert de-duplication**: every breach logs/notifies rather than
-  suppressing repeats — simpler for a prototype; a fleet would want
-  hysteresis to avoid alert fatigue.
-- **Slack posted directly from the device**: simplest path to a working
-  demo. At fleet scale this should move to a Lambda on the Rules Engine
-  instead — one webhook credential instead of one per device.
+**Stretch goals**
 
-## Scaling to thousands of devices
+Per the brief's guidance to pick 1-2 rather than attempt everything, I
+implemented both **Level 1** items:
 
-IoT Core scales the broker; that's not something this project builds.
-Per-device topics (`edge/devices/{id}/metrics`) with per-device IoT
-policies give least-privilege at scale — each device can publish to its
-own topic only, nothing else. Routing logic lives centrally in the Rules
-Engine, so firmware stays stable across the fleet; you change *where*
-data goes without redeploying to every device. Greengrass's component
-model would let the agent itself be versioned and rolled out fleet-wide.
-At scale, payload size and frequency become real cost levers (IoT Core
-bills per message) — reporting windowed avg/max rather than raw
-per-cycle samples is the next optimization, not yet built here. For
-local buffering specifically, a production fleet would likely use
-Greengrass's built-in Stream Manager component rather than a hand-rolled
-SQLite buffer — it solves the same problem with built-in retention and
-priority policies, already running on every Greengrass-managed device.
+- **Local alerting thresholds** — logs a warning when CPU/GPU/RAM/disk
+  cross a configurable limit (`edge_monitor/alerting.py`)
+- **Periodic Slack summary** — posts aggregated stats (avg/max over the
+  window) to a Slack channel via incoming webhook on a configurable
+  interval (`edge_monitor/slack_notifier.py`)
 
-## Security considerations
+**Level 3** (integrate with AWS IoT Core or Greengrass) is also covered,
+not as separate extra work, but because the core data-transfer
+implementation itself targets AWS IoT Core directly — the agent
+authenticates with a per-device X.509 certificate over mutual TLS and
+publishes real metrics to a live AWS IoT Core endpoint (verified via the
+MQTT test client in the AWS console), going beyond "in your design" to
+an actual working integration.
 
-- **Auth**: per-device X.509 certificate (Greengrass-provisioned in
-  production) — no shared secrets or API keys in code or config.
-- **Least privilege**: IoT policy scopes each device's `iot:Publish` to
-  one exact topic ARN, preventing spoofing or cross-device access.
-- **Transport**: TLS for all MQTT traffic (port 8883, mutual TLS).
-- **Local privilege**: the agent runs as an unprivileged systemd user —
-  it only needs read access to `/proc`, `/sys`, and NVML, never root.
-- **Secrets hygiene**: certs and the Slack webhook are excluded from
-  version control and loaded from environment variables or an untracked
-  config file; the private key's file permissions are locked to
-  owner-only (`chmod 600`).
-- **Data exposure**: hardware metrics aren't sensitive alone, but
-  device ID/location metadata could fingerprint a client site, so
-  access to fleet-wide queries downstream should be similarly scoped.
+Level 2 (status UI, containerization) was deliberately not attempted, in
+line with the brief's guidance not to attempt every stretch goal.
+
+## Development environment
+
+This was developed and tested inside **WSL2 running Ubuntu 22.04** on a
+Windows machine, rather than native Windows — deliberately, since the
+target deployment is Linux, and several things behave differently or
+don't exist at all on Windows (`os.getloadavg()`, `psutil.sensors_
+temperatures()`, systemd). Developing inside a real Ubuntu environment
+meant the code path matched the target device exactly, rather than being
+approximated and hoping it translates.
+
+VS Code ran on the Windows side, connected to the WSL2 environment via
+the **WSL extension** (Remote-WSL) — all file editing, the integrated
+terminal, and the Python virtual environment lived inside Ubuntu, not on
+the Windows filesystem. GPU testing used WSL2's NVIDIA GPU passthrough
+(`nvidia-smi` and `pynvml` both work through it), which let the GPU
+collector be verified against real hardware during development, even
+though it's a different GPU than the target device's A4000 — the code
+path itself is identical either way.
+
+The one gap worth being upfront about: the systemd service file was
+written but not live-tested, since WSL2 has no systemd. It would need
+verification on an actual Ubuntu 22.04 install (or the target edge
+device itself) before being trusted in production as-is.
+
+## Prerequisites
+
+- Linux (developed and tested on Ubuntu 22.04 via WSL2; target deployment
+  is native Ubuntu 22.04 on the edge device)
+- Python 3.10+
+- NVIDIA driver + `nvidia-smi` for GPU metrics (optional — the agent
+  degrades gracefully to `gpu: null` if no GPU/driver is present)
+
+## Install
+
+\`\`\`bash
+sudo apt install -y python3 python3-venv python3-pip
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+\`\`\`
+
+## Configure
+
+\`\`\`bash
+cp config/config.example.yaml config/config.yaml
+\`\`\`
+
+Edit `config/config.yaml` for your environment — at minimum, `device_id`
+and the `mqtt` section (see below for local vs. AWS setup).
+
+## Run it locally — no AWS account needed
+
+\`\`\`bash
+sudo apt install mosquitto mosquitto-clients
+sudo systemctl start mosquitto   # or: mosquitto -d -p 1883
+
+# Point config.yaml at the local broker: mqtt.broker_host: "localhost",
+# mqtt.broker_port: 1883, mqtt.use_tls: false
+
+# In one terminal:
+mosquitto_sub -h localhost -t 'edge/devices/#' -v
+
+# In another:
+python3 main.py --config config/config.yaml
+\`\`\`
+
+You should see metrics arrive in the subscriber terminal every
+`poll_interval_seconds`. Stop Mosquitto mid-run and the agent keeps
+collecting without crashing — metrics queue up in `data/buffer.db` and
+drain automatically once the broker comes back.
+
+## Wiring up AWS IoT Core
+
+This is free at prototype scale — AWS IoT Core's 12-month free tier
+covers far more messages than a single demo device will use.
+
+1. AWS IoT Core console → **Manage → All devices → Things → Create thing**
+   → name it (e.g. `edge-device-001`) → auto-generate a certificate.
+2. Attach a policy scoped to least privilege, e.g.:
+   \`\`\`json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       { "Effect": "Allow", "Action": ["iot:Connect"], "Resource": "*" },
+       { "Effect": "Allow", "Action": ["iot:Publish"],
+         "Resource": "arn:aws:iot:*:*:topic/edge/devices/edge-device-001/metrics" }
+     ]
+   }
+   \`\`\`
+3. Download the device certificate, private key, and Amazon Root CA 1
+   (the root CA is account-independent — can also be fetched directly:
+   `curl -o certs/AmazonRootCA1.pem https://www.amazontrust.com/repository/AmazonRootCA1.pem`).
+4. Place all three in `certs/` using the filenames `config.yaml` expects:
+   `device-cert.pem.crt`, `device-private.pem.key`, `AmazonRootCA1.pem`.
+   Lock down the key: `chmod 600 certs/device-private.pem.key`.
+5. Find your account's IoT data endpoint (console → Settings → Domain
+   configurations), set it as `mqtt.broker_host` in `config.yaml`, with
+   `broker_port: 8883` and `use_tls: true`.
+6. Run the agent, and watch messages arrive live in **AWS IoT Core → MQTT
+   test client**, subscribed to the device's exact topic (e.g.
+   `edge/devices/edge-device-001/metrics`).
+
+**Important:** `device_id` in `config.yaml` must exactly match the thing
+name used when creating the IoT policy above — the policy's `iot:Publish`
+permission is scoped to one specific topic ARN built from that name. A
+mismatch doesn't break the connection itself (TLS auth succeeds
+regardless), but every publish gets silently rejected as unauthorized.
+
+## Slack summary setup (optional)
+
+Create a Slack incoming webhook (api.slack.com/apps → your app →
+Incoming Webhooks), then:
+
+\`\`\`bash
+export EDGE_MONITOR_SLACK_WEBHOOK="https://hooks.slack.com/services/..."
+\`\`\`
+
+and set `slack.enabled: true` in `config.yaml`. The URL is deliberately
+read from an environment variable, not the config file, so it's never
+committed to git.
+
+## Logging
+
+Logs go to both the console and a rotating file at `logs/edge-monitor.log`
+(bounded by `log_max_bytes` / `log_backup_count`, default 5MB × 3 backups)
+— same disk-bounding philosophy as the SQLite buffer, since this runs on
+a disk-constrained edge device.
+
+## Running as a systemd service
+
+\`\`\`ini
+[Unit]
+Description=Edge device hardware monitoring agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/edge-monitor
+ExecStart=/opt/edge-monitor/venv/bin/python3 /opt/edge-monitor/main.py --config /opt/edge-monitor/config/config.yaml
+Restart=on-failure
+RestartSec=5
+User=edge-monitor
+Group=edge-monitor
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+\`\`\`
+
+Save as `/etc/systemd/system/edge-monitor.service` on the target device,
+then `sudo systemctl daemon-reload && sudo systemctl enable --now edge-monitor`.
+*Note: written but not live-tested in this environment — WSL2 has no
+systemd, so this couldn't be exercised end-to-end during development.*
+
+## Running tests / sanity checks
+
+There's no formal test suite given the prototype scope, but each module
+is small and pure enough to exercise directly, e.g.:
+
+\`\`\`bash
+python3 -c "from edge_monitor import collectors; import json; print(json.dumps(collectors.collect_all('test'), indent=2))"
+\`\`\`
+
+## Assumptions made
+
+- Devices already have AWS IoT Core device identity provisioned (via
+  Greengrass, in production) — this prototype's cert-loading mirrors that
+  workflow rather than re-implementing fleet provisioning.
+- A single NVIDIA GPU at index 0 (matches the stated A4000 hardware);
+  multi-GPU would need a small extension.
+- "Non-blocking" means the agent's own collection loop never blocks on
+  network I/O — not full OS-level process isolation (cgroups, etc.).
+- Metrics are sent as raw per-cycle samples, not pre-aggregated; the next
+  optimization at fleet scale would be reporting windowed min/avg/max to
+  cut bandwidth and per-message cost.
+- Developed inside WSL2 (Ubuntu 22.04) rather than native Windows, so
+  Linux-specific behavior (NVML, `/proc`-based metrics) matches the
+  target edge device; some hardware sensors (board temperature) returned
+  no data under WSL2's virtualization and would behave differently on
+  bare-metal Ubuntu.
+
+## AI assistant disclosure
+
+I used Claude (Sonnet 4.6) throughout development, primarily as a
+pair-programming tutor rather than a code generator. This was especially
+true for the MQTT connection and publishing logic, where Claude explained
+the underlying concepts — why MQTT connections are asynchronous, why
+dataclasses need field(default_factory=...) instead of a bare default —
+before I wrote the implementation myself. For a few pieces, including the
+Slack summary aggregation and the rotating-file logging setup, I asked
+for working code directly rather than writing it from scratch.
+
+Everything in this repo was typed into my own environment, run, and
+tested by me — every collector, the buffer, the MQTT publisher (against
+both a local Mosquitto broker and a real AWS IoT Core endpoint), and the
+agent loop were verified with real command output, not assumed working
+from the code alone.
+
+Several real issues came up during development that Claude identified
+from my terminal output or screenshots — a working-directory mix-up that
+scattered project files, an unsaved file that made a module appear empty,
+and a GPU metrics key-naming mismatch between collect_gpu() and
+downstream alerting code. In each case I understood the explanation,
+verified it myself against the actual file/output, and applied the fix.
+Separately, a topic-permission mismatch between device_id and the IoT
+policy's topic ARN was caught and corrected before it ever caused a
+real failure, while setting up AWS IoT Core.
+
+All AWS IoT Core setup (Thing/certificate creation, IoT policy scoping,
+endpoint configuration) and the Slack webhook integration were done
+firsthand in my own AWS account and Slack workspace, with Claude guiding
+the steps and explaining the security reasoning behind each one (e.g.
+least-privilege topic scoping, why the root CA download is
+account-independent).
