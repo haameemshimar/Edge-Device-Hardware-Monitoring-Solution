@@ -39,10 +39,16 @@ class Agent:
 
     def run_cycle(self) -> None:
         metrics = collectors.collect_all(self.device_id)
+        disk = metrics.get("disk")
+        temp = metrics.get("temperature")
+        disk_info = f" disk={disk['percent']:.1f}%" if disk else " disk=N/A"
+        temp_info = f" temp={temp['temperature_c']:.1f}°C" if temp else " temp=N/A"
         logger.info(
-            "Collected: cpu=%.1f%% mem=%.1f%%",
+            "Collected: cpu=%.1f%% mem=%.1f%%%s%s",
             metrics["cpu"]["percent"],
             metrics["memory"]["percent"],
+            disk_info,
+            temp_info,
         )
 
         self._slack_window.append(metrics)
