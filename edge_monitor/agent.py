@@ -44,10 +44,12 @@ class Agent:
         disk = metrics.get("disk")
         temp = metrics.get("temperature")
         read_write = metrics.get("read_write_bytes")
+
         disk_info = f" disk={disk['percent']:.1f}%" if disk else " disk=N/A"
         temp_info = f" temp={temp['temperature_c']:.1f}°C" if temp else " temp=N/A"
         read_info = f" read_bytes={read_write['read_bytes']} MB" if read_write else " read_write=N/A"
         write_info = f" write_bytes={read_write['write_bytes']} MB" if read_write else " read_write=N/A"
+        
         logger.info(
             "Collected: cpu=%.1f%% mem=%.1f%%%s%s%s%s",
             metrics["cpu"]["percent"],
