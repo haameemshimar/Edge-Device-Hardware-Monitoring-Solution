@@ -21,6 +21,8 @@ class Thresholds:
     gpu_utilization_percent: float = 95.0
     gpu_temperature_c: float = 85.0
     disk_percent: float = 90.0
+    read_byte_max: float = 20
+    write_byte_max: float = 10
 
 
 @dataclass

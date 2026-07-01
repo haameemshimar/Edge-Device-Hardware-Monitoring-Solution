@@ -35,11 +35,14 @@ def send_slack_alert(webhook_url: str, device_id: str, alerts: list[str]) -> boo
 def build_summary_text(device_id: str, window: list[dict]) -> str:
     cpu_vals = [m["cpu"]["percent"] for m in window]
     mem_vals = [m["memory"]["percent"] for m in window]
+    read_vals = [m["read_write_bytes"]["read_bytes"] for m in window]
 
     cpu_avg = statistics.fmean(cpu_vals)
     cpu_max = max(cpu_vals)
     mem_avg = statistics.fmean(mem_vals)
     mem_max = max(mem_vals)
+    read_avg = statistics.fmean(read_vals)
+    read_max = max(read_vals)
 
     gpu_vals = [m["gpu"]["utilization_percent"] for m in window if m.get("gpu")]
     gpu_part = ""
@@ -53,4 +56,5 @@ def build_summary_text(device_id: str, window: list[dict]) -> str:
         f"CPU avg {cpu_avg:.1f}% (max {cpu_max:.1f}%), "
         f"Memory avg {mem_avg:.1f}% (max {mem_max:.1f}%)"
         f"{gpu_part}"
+        f"Read Byte avg {read_avg} (max {read_max})"
     )

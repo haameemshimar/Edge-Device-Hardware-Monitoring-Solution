@@ -36,4 +36,19 @@ def check_thresholds(metrics: dict, thresholds: Thresholds) -> list[str]:
                 f"(threshold {thresholds.gpu_temperature_c}C)"
             )
 
+    read_write = metrics.get("read_write_bytes")
+
+    if read_write and read_write["read_bytes"] >= thresholds.read_byte_max:
+        alerts.append(
+            f"Read bytes high: {read_write['read_bytes']}MB "
+            f"(threshold {thresholds.read_byte_max}MB)"
+        )
+
+    if read_write and read_write["write_bytes"] >= thresholds.write_byte_max:
+        alerts.append(
+            f"Write bytes high: {read_write['write_bytes']}MB "
+            f"(threshold {thresholds.write_byte_max}MB)"
+        )
+
+
     return alerts

@@ -101,6 +101,14 @@ def collect_temperature() -> dict | None:
             return {"sensor": name, "temperature_c": entries[0].current}
     return None
 
+def disk_input_output() -> dict | None:
+    try:
+        counter = psutil.disk_io_counters()
+        MB = 1024 ** 3
+        return {"read_bytes" : round(counter.read_bytes/MB,1) , "write_bytes" : round(counter.write_bytes/MB,1)}
+    except Exception as exc:
+        return None
+
 
 def collect_all(device_id: str) -> dict:
     return {
@@ -111,4 +119,5 @@ def collect_all(device_id: str) -> dict:
         "disk": collect_disk(),
         "gpu": collect_gpu(),
         "temperature": collect_temperature(),
+        "read_write_bytes" : disk_input_output(),
     }

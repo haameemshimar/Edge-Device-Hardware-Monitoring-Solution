@@ -1,4 +1,5 @@
 # test_alerting.py
+# TO RUN : pytest tests/test_alerting.py -v
 from edge_monitor.alerting import check_thresholds
 from edge_monitor.config import Thresholds
 

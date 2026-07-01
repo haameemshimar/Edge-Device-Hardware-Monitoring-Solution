@@ -44,6 +44,10 @@ class MQTTPublisher:
         self._client.loop_start()
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
+        #print(f"DEBUG _on_connect fired: reason_code={reason_code}")
+        print(f"DEBUG _on_connect fired!")
+        print(f"DEBUG broker: {self.broker_host}:{self.broker_port}")
+        print(f"DEBUG reason_code: {reason_code}")
         self.connected = (reason_code == 0)
         if self.connected:
             logger.info("MQTT connected to %s:%s", self.broker_host, self.broker_port)
