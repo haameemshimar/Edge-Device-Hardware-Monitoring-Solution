@@ -21,3 +21,4 @@ practice.py
 tests/run_alerting_test.py
 tests/run_cycle_test.py
 tests/practice.py
+tests/run_slack_test.py
