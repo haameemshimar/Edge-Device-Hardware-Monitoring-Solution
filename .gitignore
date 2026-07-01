@@ -16,3 +16,5 @@ certs/*.pem.key
 certs/*.crt
 certs/*.key
 config/config.yaml
+run_cycle_test.py
+practice.py
