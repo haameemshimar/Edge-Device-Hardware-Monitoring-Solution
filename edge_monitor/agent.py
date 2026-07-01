@@ -12,7 +12,7 @@ from edge_monitor.buffer import LocalBuffer
 from edge_monitor.config import AppConfig
 from edge_monitor.transport import MQTTPublisher
 from edge_monitor.alerting import check_thresholds
-from edge_monitor.slack_notifier import build_summary_text, send_slack_message
+from edge_monitor.slack_notifier import build_summary_text, send_slack_message, send_slack_alert
 logger = logging.getLogger(__name__)
 
 
@@ -22,15 +22,17 @@ class Agent:
         self.poll_interval_seconds = config.poll_interval_seconds
         self.mqtt_topic = config.mqtt.topic.format(device_id=config.device_id)
         self.buffer = LocalBuffer(config.buffer_db_path)
-        self.publisher = MQTTPublisher(
-            config.mqtt.broker_host,
-            config.mqtt.broker_port,
-            client_id=config.device_id,
-            use_tls=config.mqtt.use_tls,
-            ca_cert=config.mqtt.ca_cert,
-            client_cert=config.mqtt.client_cert,
-            client_key=config.mqtt.client_key,
-        )
+        self.publisher = None
+        if config.mqtt.enabled:
+            self.publisher = MQTTPublisher(
+                config.mqtt.broker_host,
+                config.mqtt.broker_port,
+                client_id=config.device_id,
+                use_tls=config.mqtt.use_tls,
+                ca_cert=config.mqtt.ca_cert,
+                client_cert=config.mqtt.client_cert,
+                client_key=config.mqtt.client_key,
+            )
         self._stop_event = threading.Event()
         self.thresholds = config.thresholds
         self.slack = config.slack
@@ -54,13 +56,20 @@ class Agent:
         self._slack_window.append(metrics)
         self._maybe_send_slack_summary()
 
-        for alert in check_thresholds(metrics, self.thresholds):
+        alerts = check_thresholds(metrics, self.thresholds)
+        for alert in alerts:
             logger.warning("[ALERT] %s", alert)
+
+        if alerts and self.slack.enabled and self.slack.webhook_url:
+            send_slack_alert(self.slack.webhook_url, self.device_id, alerts)
 
         self.buffer.push(metrics)
         self._drain_buffer()
 
     def _drain_buffer(self, limit: int = 20) -> None:
+        if not self.publisher:
+            logger.info("MQTT disabled -- skipping publish")
+            return
         if not self.publisher.connected:
             logger.info("Not connected -- leaving %d row(s) buffered", self.buffer.size())
             return
@@ -75,7 +84,8 @@ class Agent:
                 break
 
     def start(self) -> None:
-        self.publisher.start()
+        if self.publisher:
+            self.publisher.start()
         logger.info(
             "Agent starting for device_id=%s, poll_interval=%ss",
             self.device_id,
@@ -92,7 +102,8 @@ class Agent:
                 sleep_for = max(0.0, self.poll_interval_seconds - elapsed)
                 self._stop_event.wait(sleep_for)
         finally:
-            self.publisher.stop()
+            if self.publisher:
+                self.publisher.stop()
             self.buffer.close()
             logger.info("Agent stopped, resources released")
 

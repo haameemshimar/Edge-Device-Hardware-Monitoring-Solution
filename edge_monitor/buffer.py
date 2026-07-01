@@ -36,6 +36,26 @@ class LocalBuffer:
                 (json.dumps(payload), time.time()),
             )
             self._conn.commit()
+            self._prune()    # ← add this line
+            
+    def _prune(self) -> None:
+        cutoff = time.time() - self.max_age_seconds
+        self._conn.execute(
+            "DELETE FROM metrics WHERE created_at < ?",
+            (cutoff,)
+        )
+        (count,) = self._conn.execute("SELECT COUNT(*) FROM metrics").fetchone()
+        if count > self.max_rows:
+            overflow = count - self.max_rows
+            self._conn.execute(
+                """
+                DELETE FROM metrics WHERE id IN (
+                    SELECT id FROM metrics ORDER BY created_at ASC LIMIT ?
+                )
+                """,
+                (overflow,)
+            )
+        self._conn.commit()
 
     def pop_batch(self, limit: int = 50) -> list[tuple[int, dict]]:
         with self._lock:

@@ -22,6 +22,16 @@ def send_slack_message(webhook_url: str, text: str) -> bool:
         return False
 
 
+def send_slack_alert(webhook_url: str, device_id: str, alerts: list[str]) -> bool:
+    if not webhook_url or not alerts:
+        return False
+
+    alert_lines = "\n".join(f"• {alert}" for alert in alerts)
+    text = f"⚠️ ALERT — {device_id}\n{alert_lines}"
+
+    return send_slack_message(webhook_url, text)
+
+
 def build_summary_text(device_id: str, window: list[dict]) -> str:
     cpu_vals = [m["cpu"]["percent"] for m in window]
     mem_vals = [m["memory"]["percent"] for m in window]
@@ -31,8 +41,16 @@ def build_summary_text(device_id: str, window: list[dict]) -> str:
     mem_avg = statistics.fmean(mem_vals)
     mem_max = max(mem_vals)
 
+    gpu_vals = [m["gpu"]["utilization_percent"] for m in window if m.get("gpu")]
+    gpu_part = ""
+    if gpu_vals:
+        gpu_avg = statistics.fmean(gpu_vals)
+        gpu_max = max(gpu_vals)
+        gpu_part = f", GPU avg {gpu_avg:.1f}% (max {gpu_max:.1f}%)"
+
     return (
         f"Device {device_id} -- last {len(window)} samples -- "
         f"CPU avg {cpu_avg:.1f}% (max {cpu_max:.1f}%), "
         f"Memory avg {mem_avg:.1f}% (max {mem_max:.1f}%)"
+        f"{gpu_part}"
     )
