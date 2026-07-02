@@ -11,6 +11,7 @@ from edge_monitor import collectors
 from edge_monitor.buffer import LocalBuffer
 from edge_monitor.config import AppConfig
 from edge_monitor.transport import MQTTPublisher
+from edge_monitor.health import start_health_server
 from edge_monitor.alerting import check_thresholds
 from edge_monitor.slack_notifier import build_summary_text, send_slack_message, send_slack_alert
 logger = logging.getLogger(__name__)
@@ -94,10 +95,11 @@ class Agent:
         if self.publisher:
             #print(f"DEBUG: connecting to {self.publisher.broker_host}:{self.publisher.broker_port}")
             self.publisher.start()
+        start_health_server(self)
         logger.info(
-            "Agent starting for device_id=%s, poll_interval=%ss",
-            self.device_id,
-            self.poll_interval_seconds,
+                "Agent starting for device_id=%s, poll_interval=%ss",
+                self.device_id,
+                self.poll_interval_seconds,
         )
         try:
             while not self._stop_event.is_set():
